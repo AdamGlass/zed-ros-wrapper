@@ -50,10 +50,6 @@
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/calib3d/calib3d.hpp>
 
-//ZED Includes
-#include <zed/Camera.hpp>
-
-using namespace sl::zed;
 using namespace std;
 
 int computeDepth;
@@ -98,20 +94,23 @@ void publishCamInfo(sensor_msgs::CameraInfoPtr left_cam_info_msg, sensor_msgs::C
 
 // Function to fill both camera info messages with camera's parameters
 
-void fillCamInfo(Camera* zed, sensor_msgs::CameraInfoPtr left_cam_info_msg, sensor_msgs::CameraInfoPtr second_cam_info_msg,
-        string left_frame_id, string second_frame_id) {
+void fillCamInfo(cv::VideoCapture &zedCv,
+		 ros::NodeHandle &nh_ns,
+		 sensor_msgs::CameraInfoPtr left_cam_info_msg,
+		 sensor_msgs::CameraInfoPtr second_cam_info_msg,
+		 string left_frame_id,
+		 string second_frame_id) {
 
-    int width = zed->getImageSize().width;
-    int height = zed->getImageSize().height;
+    int width = (int) zedCv.get(CV_CAP_PROP_FRAME_WIDTH) / 2;
+    int height = (int) zedCv.get(CV_CAP_PROP_FRAME_HEIGHT);
 
-    sl::zed::StereoParameters* zedParam = zed->getParameters();
+    float baseline = 0.12;
 
-    float baseline = zedParam->baseline;
-
-    float fx = zedParam->LeftCam.fx;
-    float fy = zedParam->LeftCam.fy;
-    float cx = zedParam->LeftCam.cx;
-    float cy = zedParam->LeftCam.cy;
+    float fx = 0;
+    float fy = 0;
+    float cx = width * 2;
+    float cy = height / 2 ;
+    
 
     // There is no distorsions since the images are rectified
     double k1 = 0;
@@ -119,6 +118,17 @@ void fillCamInfo(Camera* zed, sensor_msgs::CameraInfoPtr left_cam_info_msg, sens
     double k3 = 0;
     double p1 = 0;
     double p2 = 0;
+
+    nh_ns.getParam("baseline", baseline);
+    nh_ns.getParam("fx", fx);
+    nh_ns.getParam("fy", fy);
+    nh_ns.getParam("cx", cx);
+    nh_ns.getParam("cy", cy);
+    nh_ns.getParam("k1", k1);
+    nh_ns.getParam("k2", k2);
+    nh_ns.getParam("k3", k3);
+    nh_ns.getParam("p1", p1);
+    nh_ns.getParam("p2", p2);
 
     left_cam_info_msg->distortion_model = sensor_msgs::distortion_models::PLUMB_BOB;
     second_cam_info_msg->distortion_model = sensor_msgs::distortion_models::PLUMB_BOB;
@@ -162,12 +172,12 @@ void fillCamInfo(Camera* zed, sensor_msgs::CameraInfoPtr left_cam_info_msg, sens
 
 int main(int argc, char **argv) {
     computeDepth = (argc >= 2) ? atoi(argv[1]) : 1; // Argument "computeDepth" in launch file, "0": publish left+right, "1": publish left+depth
+    int capture_width, capture_height;
 
     // Launch file parameters
-    int resolution = sl::zed::VGA;
-    int quality = sl::zed::MODE::PERFORMANCE;
-    int sensing_mode = sl::zed::SENSING_MODE::RAW;
     int rate = 25;
+    int device_number;
+    int resolution;
 
     std::string img_topic = "image_rect";
 #if 0
@@ -190,8 +200,7 @@ int main(int argc, char **argv) {
 
     // Get parameters from launch file
     nh_ns.getParam("resolution", resolution);
-    nh_ns.getParam("quality", quality);
-    nh_ns.getParam("sensing_mode", sensing_mode);
+    nh_ns.getParam("device_number", device_number);
     nh_ns.getParam("frame_rate", rate);
     nh_ns.getParam("left_topic", left_topic);
     nh_ns.getParam("second_topic", second_topic);
@@ -200,42 +209,39 @@ int main(int argc, char **argv) {
     nh_ns.getParam("left_frame_id", left_frame_id);
     nh_ns.getParam("second_frame_id", second_frame_id);
 
-
-    sl::zed::Camera *zed;
-    if (argc == 3) {
-        zed = new sl::zed::Camera(argv[2]); // Argument "svo_file" in launch file
-        ROS_INFO_STREAM("Reading SVO file : " << argv[2]);
-    } else {
-        zed = new sl::zed::Camera(static_cast<sl::zed::ZEDResolution_mode> (resolution));
-        ROS_INFO_STREAM("Using ZED Camera");
+    cv::VideoCapture zedCv(device_number);
+    switch (resolution) {
+    case 0:
+      capture_width = 4416;
+      capture_height = 1242;
+      break;
+    case 1:
+      capture_width = 3840;
+      capture_height = 1080;
+      break;
+    case 2:
+      capture_width = 2560;
+      capture_height = 720;
+      break;
+    case 3:
+      capture_width = 640;
+      capture_height = 480;
+      break;
     }
 
-    ERRCODE err;
-    if (computeDepth)
-        err = zed->init(static_cast<sl::zed::MODE> (quality), -1, true);
-    else
-        err = zed->init(sl::zed::MODE::NONE, -1, true);
+    zedCv.set(CV_CAP_PROP_FRAME_WIDTH, capture_width);
+    zedCv.set(CV_CAP_PROP_FRAME_HEIGHT, capture_height);
+    int width = capture_width /2;
+    int height = capture_height;
 
-    //ERRCODE display
-    ROS_INFO_STREAM(errcode2str(err));
-    //cout << errcode2str(err) << endl;
-
-    // Quit if an error occurred
-    if (err != SUCCESS) {
-        delete zed;
-        return 1;
-    }
-
-    int width = zed->getImageSize().width;
-    int height = zed->getImageSize().height;
     ROS_DEBUG_STREAM("Image size : " << width << "x" << height);
 
+    cv::Size frameSize(capture_width, capture_height);
     cv::Size Taille(width, height);
 
-    cv::Mat leftImRGBA(Taille, CV_8UC4);
-    cv::Mat leftImRGB(Taille, CV_8UC3);
-    cv::Mat secondImRaw;
-    cv::Mat secondIm;
+    cv::Mat frameRGB(frameSize, CV_8UC3);
+    cv::Mat frameLeft;
+    cv::Mat frameRight;
 
     image_transport::ImageTransport it_zed(nh);
 
@@ -255,64 +261,39 @@ int main(int argc, char **argv) {
     sensor_msgs::CameraInfoPtr left_cam_info_msg(new sensor_msgs::CameraInfo());
     sensor_msgs::CameraInfoPtr second_cam_info_msg(new sensor_msgs::CameraInfo());
 
-    fillCamInfo(zed, left_cam_info_msg, second_cam_info_msg, left_frame_id, second_frame_id);
+    fillCamInfo(zedCv, nh_ns, left_cam_info_msg, second_cam_info_msg, left_frame_id, second_frame_id);
 
     ros::Rate loop_rate(rate);
-
-    bool old_image = false;
+    bool got_frame;
 
     try {
-        // Main loop
-        while (ros::ok()) {
-            // Check for subscribers
-            if (pub_left.getNumSubscribers() > 0 || pub_second.getNumSubscribers() > 0) {
+      // Main loop
+      while (ros::ok()) {
+	// Check for subscribers
+	if (pub_left.getNumSubscribers() > 0 || pub_second.getNumSubscribers() > 0) {
 
-                // Get current time
-                ros::Time t = ros::Time::now();
+	  // Get current time
+	  ros::Time t = ros::Time::now();
 
-                if (computeDepth)
-                    old_image = zed->grab(static_cast<sl::zed::SENSING_MODE> (sensing_mode), true, true);
-                else
-                    old_image = zed->grab(static_cast<sl::zed::SENSING_MODE> (sensing_mode), false, false);
+	  got_frame = zedCv.read(frameRGB);
+	  
+	  frameLeft = frameRGB.colRange(0, width);
+	  frameRight = frameRGB.colRange(width, capture_width);
 
-                if (old_image) {
-                    // Wait for a new image to proceed
-                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                    continue;
-                }
+	  if (got_frame) {
+	    publishCamInfo(left_cam_info_msg, second_cam_info_msg, pub_left_cam_info, pub_second_cam_info, t);
+	    publishImages(frameLeft, frameRight, pub_left, pub_second, left_frame_id, second_frame_id, t);
+	  }
+	  ros::spinOnce();
+	  loop_rate.sleep();
+	} else std::this_thread::sleep_for(std::chrono::milliseconds(10)); // No subscribers, we just wait
 
-                // Retrieve RGBA Left image
-                slMat2cvMat(zed->retrieveImage(sl::zed::SIDE::LEFT)).copyTo(leftImRGBA);
-                // Convert to RGB
-                cv::cvtColor(leftImRGBA, leftImRGB, CV_RGBA2RGB);
-
-                if (computeDepth) {
-                    ROS_DEBUG_STREAM("Publishing left and depth Images");
-                    // Retrieve raw depth data and convert it to 16_bit data
-                    slMat2cvMat(zed->retrieveMeasure(sl::zed::MEASURE::DEPTH)).convertTo(secondIm, CV_16UC1);
-                } else {
-                    ROS_DEBUG_STREAM("Publishing left and right Images");
-                    // Retrieve RGBA Right image
-                    slMat2cvMat(zed->retrieveImage(sl::zed::SIDE::RIGHT)).copyTo(secondImRaw);
-                    // Convert to RGB
-                    cv::cvtColor(secondImRaw, secondIm, CV_RGBA2RGB);
-                }
-                publishCamInfo(left_cam_info_msg, second_cam_info_msg, pub_left_cam_info, pub_second_cam_info, t);
-                ROS_DEBUG_STREAM("Camera info published");
-                publishImages(leftImRGB, secondIm, pub_left, pub_second, left_frame_id, second_frame_id, t);
-                ROS_DEBUG_STREAM("Images published");
-
-                ros::spinOnce();
-                loop_rate.sleep();
-            } else std::this_thread::sleep_for(std::chrono::milliseconds(10)); // No subscribers, we just wait
-        }
+      }
     } catch (...) {
-        ROS_ERROR("Unknown error.");
-        return 1;
+      ROS_ERROR("Unknown error.");
+      return 1;
     }
+
     ROS_INFO("Quitting zed_depth_stereo_wrapper_node ...\n");
-
-    delete zed;
-
     return 0;
 }

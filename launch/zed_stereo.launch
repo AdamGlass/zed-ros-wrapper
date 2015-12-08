@@ -5,10 +5,18 @@
   
   <node name="zed_wrapper_node" pkg="zed_wrapper" type="zed_wrapper_node" args="$(arg computeDepth) $(arg svo_file)" output="screen">
  
-    <param name="resolution"            value="3" />
+    <param name="resolution"            value="2" />
+    <param name="baseline"              value="0.12" />
     <param name="quality"               value="1" />
     <param name="sensing_mode"          value="1" />
     <param name="frame_rate"            value="25" />
+    
+    <param name="device_number"         value="0" />
+    <param name="fx"                    value="700" />
+    <param name="cy"                    value="640" />
+    <param name="cy"                    value="360" />
+    <param name="k1"                    value="-0.16" />
+    <param name="k2"                    value="0" />
   	
     <param name="left_topic"            value="/stereo/left_image" />
 	  <param name="second_topic"          value="/stereo/right_image" />
